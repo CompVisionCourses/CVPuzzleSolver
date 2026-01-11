@@ -1,4 +1,7 @@
+#include <filesystem>
 #include <libimages/draw.h>
+#include <libimages/algorithms/blur.h>
+#include <libimages/algorithms/downsample.h>
 #include <libimages/algorithms/grayscale.h>
 #include <libimages/algorithms/threshold_masking.h>
 #include <libimages/algorithms/morphology.h>
@@ -16,6 +19,8 @@
 #include <libimages/image_io.h>
 
 #include <iostream>
+
+#include "sides_comparison_utils.h"
 
 int main() {
     try {
@@ -35,12 +40,19 @@ int main() {
             // "03_eight_parts_shuffled2",
         };
 
+        // создание визуализации каждой пары сопоставлений занимает большое время, поэтому оставим этот выключатель на будущее
+        // когда нужен просто результат без анализа - можно будет выключить
+        bool draw_sides_matching_plots = true;
+
         Timer all_images_t;
         for (const std::string &image_name: to_process) {
             Timer total_t;
             Timer t;
 
             std::string debug_dir = "debug/" + image_name + "/";
+            // удаляем папку чтобы не анализировать случайно старые визуализации
+            std::filesystem::remove_all(debug_dir);
+
             image8u image = load_image("data/" + image_name + ".jpg");
             auto [w, h, c] = image.size();
             rassert(c == 3, 237045347618912, image.channels());
@@ -121,6 +133,7 @@ int main() {
             }
             debug_io::dump_image(debug_dir + "07_colorized_objects.jpg", debug_io::colorize_labels(image_with_object_indices, 0));
 
+            std::vector<std::vector<std::vector<point2i>>> objSides(objects_count);
             for (int obj = 0; obj < objects_count; ++obj) {
                 std::string obj_debug_dir = debug_dir + "objects/object" + std::to_string(obj) + "/";
 
@@ -171,6 +184,179 @@ int main() {
                     drawPoints(sides_visualization, sides[i], side_color);
                 }
                 debug_io::dump_image(obj_debug_dir + "06_sides.jpg", sides_visualization);
+
+                objSides[obj] = sides;
+            }
+
+            struct MatchedSide {
+                int objB = -1;
+                int sideB = -1;
+                float differenceBest = -1;
+                float differenceSecondBest = -1;
+            };
+            // в этом векторе мы будем хранить сопоставления:
+            // objB - индекс сопоставленного объекта-кусочка пазла
+            // sideB - индекс сопоставленной стороны сопоставленного кусочка
+            // differenceBest - насколько отличаются цвета (по нашей метрике, 0 - совпадают идеально)
+            // differenceSecondBest - насколько отличаются цвета со второй по лучшевизне сопоставленной стороной
+            //        (нужно для анализа "насколько наша метрика уверенно отличила правильный ответ от ложного")
+            // если сопоставления не нашлось: -1 -1 -1
+            std::vector<std::vector<MatchedSide>> objMatchedSides(objects_count);
+
+            // теперь будем сопоставлять каждую сторону объекта с каждой другой стороной другого объекта
+            std::cout << "matching sides with each other" << std::endl;
+            // перебираем объект А и его сторону для которой мы будем искать сопоставление
+            for (int objA = 0; objA < objects_count; ++objA) {
+                std::string obj_debug_dir = debug_dir + "objects/object" + std::to_string(objA) + "/";
+                objMatchedSides[objA].resize(objSides[objA].size());
+                rassert(objMatchedSides[objA][0].differenceBest == -1, 23423431);
+                for (int sideA = 0; sideA < objSides[objA].size(); ++sideA) {
+                    // мы знаем из каких пикселей брать цвета для этих точек
+                    const std::vector<point2i> pixelsA = objSides[objA][sideA];
+                    // извлекаем цвета пикселей из картинки объекта A
+                    const std::vector<color8u> colorsA = extractColors(objImages[objA], pixelsA);
+                    const int channels = objImages[objA].channels();
+
+                    // перебираем другой объект B и его сторону с которой мы хотим попробовать себя сравнить
+                    for (int objB = 0; objB < objects_count; ++objB) {
+                        if (objA == objB)
+                            continue;
+                        for (int sideB = 0; sideB < objSides[objB].size(); ++sideB) {
+                            // мы знаем из каких пикселей брать цвета для точек второй стороны B
+                            std::vector<point2i> pixelsB = objSides[objB][sideB];
+                            // разворачиваем пиксели стороны в обратном порядке, ведь мы хотим как zip-молнию
+                            // сравнить их пиксель за пикселем, каждый из этих списков пикселей стороны - по часовой стрелке
+                            // значит они как борящиеся друг против друга шестеренки трутся и расходятся в противоположных направлениях
+                            // поэтому нужно их сориентировать инвертировав порядок одного из них
+                            std::reverse(pixelsB.begin(), pixelsB.end());
+                            // извлекаем цвета пикселей из картинки объекта A
+                            const std::vector<color8u> colorsB = extractColors(objImages[objB], pixelsB);
+                            rassert(channels == objImages[objB].channels(), 34712839741231);
+
+                            // чтобы удобно было сравнивать - нужно чтобы эти две стороны были выравнены по длине
+                            int n = std::min(colorsA.size(), colorsB.size());
+                            float blurStrength = 1.5f;
+                            std::vector<color8u> a = downsample(blur(colorsA, colorsA.size() * blurStrength / n), n);
+                            std::vector<color8u> b = downsample(blur(colorsB, colorsB.size() * blurStrength / n), n);
+                            rassert(a.size() == n && b.size() == n, 2378192321);
+
+                            // теперь давайте в каждой паре пикселей оценим насколько сильно они отличаются
+                            std::vector<float> differences(n);
+                            for (int i = 0; i < n; ++i) {
+                                float d = 0;
+                                color8u colA = a[i];
+                                color8u colB = b[i];
+                                for (int c = 0; c < channels; ++c) {
+                                    // TODO найдите максимальную разницу среди всех каналов
+                                    float delta = (float) colA(c) - colB(c);
+                                    d = std::max((float) std::abs(delta), d);
+                                }
+                                differences[i] = d;
+                            }
+                            for (int i = 0; i < n; ++i) {
+                                rassert(differences[i] >= 0.0f, 32423415214, differences[i]);
+                            }
+
+                            // и наконец финальный вердикт - насколько сильно отличаются эти две стороны?
+                            float total_difference = stats::percentile(differences, 90);
+
+                            float previous_best = objMatchedSides[objA][sideA].differenceBest;
+                            if (previous_best == -1 || total_difference <= previous_best) {
+                                // если раньше сопоставления еще не было вовсе (-1)
+                                // если если наше сопоставление лучше (наша разница меньше старой)
+                                // то сохраняем текущее сопоставление как пока что лучший ответ (старый ответ становится вторым по лучшевизне)
+                                objMatchedSides[objA][sideA] = {objB, sideB, total_difference, previous_best};
+                            }
+
+                            if (draw_sides_matching_plots) {
+                                // сделаем небольшой предпросмотр обоих объектов с отмеченными сторонами
+                                int preview_image_width = n;
+                                int preview_image_height = n;
+
+                                int colors_rgb_line_height = 10;
+                                int separator_line_height = 3;
+                                int graph_height = 100;
+                                // визуализируем наложение этих двух сторон
+                                image8u ab_visualization(n + n, std::max(2 * preview_image_height,  2 * colors_rgb_line_height + 4 * separator_line_height + 2 * graph_height + graph_height), 3);
+
+                                // TODO draw graph of A (RGB)
+                                // сначала нарисуем объект A + на нем отмеченная сторона A
+                                point2i offset = {0, 0}; // это точка отступа - где находится угол следующего рисуемого объекта
+                                image8u previewA = objImages[objA];
+                                drawPoints(previewA, objSides[objA][sideA], color8u(255, 0, 0), 5);
+                                previewA = downsample(blur(previewA, previewA.width() * 0.5f * blurStrength / preview_image_width), preview_image_width, preview_image_height);
+                                drawImage(ab_visualization, previewA, offset);
+                                offset.y += preview_image_height; // смещаем отступ на высоту нарисованной картинки
+
+                                // затем объект B + на нем отмеченная сторона B
+                                image8u previewB = objImages[objB];
+                                drawPoints(previewB, objSides[objB][sideB], color8u(255, 0, 0), 5);
+                                previewB = downsample(blur(previewB, previewB.width() * 0.5f * blurStrength / preview_image_width), preview_image_width, preview_image_height);
+                                drawImage(ab_visualization, previewB, offset);
+                                offset.y += preview_image_height;
+
+                                // графики рисуем в правой части картинки
+                                offset = {preview_image_width, 0};
+
+                                // сначала наложим сами цвета обеих сторон
+                                drawRGBLine(ab_visualization, a, offset, colors_rgb_line_height);
+                                offset.y += colors_rgb_line_height;
+                                drawRGBLine(ab_visualization, b, offset, colors_rgb_line_height);
+                                offset.y += colors_rgb_line_height;
+
+                                std::vector<color8u> separator_line_colors(n, color8u(0, 255, 0));
+
+                                // затем построим графики яркости этих сторон - красным цветом график яркости RED канала, зеленым и синим - GREEN/BLUE соответственно
+                                drawRGBLine(ab_visualization, separator_line_colors, offset, separator_line_height);
+                                offset.y += separator_line_height;
+                                drawGraph(ab_visualization, a, offset, graph_height);
+                                offset.y += graph_height;
+                                drawRGBLine(ab_visualization, separator_line_colors, offset, separator_line_height);
+                                offset.y += separator_line_height;
+                                drawGraph(ab_visualization, b, offset, graph_height);
+                                offset.y += graph_height;
+                                drawRGBLine(ab_visualization, separator_line_colors, offset, separator_line_height);
+                                offset.y += separator_line_height;
+
+                                // затем визуализируем графиком нашу метрику отличия
+                                float normalization_value = 100.0f; // график имеет шкалу от 0 до normalization_value
+                                drawGraph(ab_visualization, differences, offset, graph_height, normalization_value);
+                                offset.y += graph_height;
+                                drawRGBLine(ab_visualization, separator_line_colors, offset, separator_line_height);
+                                offset.y += separator_line_height;
+
+                                // заметьте что мы специально в начале файла пишем diff (еще и дополненный нулями)
+                                // благодаря этому мы прямо в списке файлов будем видеть лучшее и худшее сопоставление
+                                debug_io::dump_image(obj_debug_dir + "side" + std::to_string(sideA)
+                                    + "/diff=" + pad(total_difference, 5) + "_with_object" + std::to_string(objB) + "_side" + std::to_string(sideB) + ".png",
+                                    ab_visualization);
+                            }
+                        }
+                    }
+                }
+            }
+
+            {
+                // нарисуем отрезками сопоставления между сторонами
+                int segment_thickness = 5;
+                image8u segments_between_matched_sides = image;
+                FastRandom r(2391);
+                for (int objA = 0; objA < objects_count; ++objA) {
+                    // все сопоставления исходящие из сторон этого объекта - будут одного случайного цвета
+                    color8u random_color_for_object = {(uint8_t) r.nextInt(0, 255), (uint8_t) r.nextInt(0, 255), (uint8_t) r.nextInt(0, 255)};
+                    point2i random_shift = {r.nextInt(-segment_thickness, segment_thickness), r.nextInt(-segment_thickness, segment_thickness)}; // это нужно чтобы встречные ребра не наслоились закрыв друг друга, а было легко видеть что это два ребра
+                    for (int sideA = 0; sideA < objSides[objA].size(); ++sideA) {
+                        auto [objB, sideB, differenceBest, differenceSecondBest] = objMatchedSides[objA][sideA];
+                        if (differenceBest == -1)
+                            continue;
+                        std::cout << "obj" << objA << "-side" <<sideA << " -> obj" << objB << "-side" << sideB << " with difference=" << differenceBest << " (second best: " << differenceSecondBest << ")" << std::endl;
+                        point2i sideACenter = objOffsets[objA] + objSides[objA][sideA][objSides[objA][sideA].size() / 2]; // вершина в середине стороны A
+                        point2i sideBCenter = objOffsets[objB] + objSides[objB][sideB][objSides[objB][sideB].size() / 2]; // вершина в середине сопоставленной с ней стороны B
+                        drawPoint(segments_between_matched_sides, random_shift + sideACenter, random_color_for_object, 4 * segment_thickness);
+                        drawSegment(segments_between_matched_sides, random_shift + sideACenter, random_shift + sideBCenter, random_color_for_object, segment_thickness);
+                    }
+                }
+                debug_io::dump_image(debug_dir + "07_matched_sides.jpg", segments_between_matched_sides);
             }
 
             std::cout << "image " << image_name << " processed in " << total_t.elapsed() << " sec" << std::endl;
