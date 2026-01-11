@@ -1,4 +1,6 @@
 add_library(libimages STATIC
+        libimages/algorithms/blur.cpp
+        libimages/algorithms/downsample.cpp
         libimages/algorithms/extract_contour.cpp
         libimages/algorithms/grayscale.cpp
         libimages/algorithms/morphology.cpp
@@ -20,6 +22,8 @@ endif()
 
 if (BUILD_TESTING)
     add_executable(libimages_tests
+            libimages/algorithms/blur_tests.cpp
+            libimages/algorithms/downsample_tests.cpp
             libimages/algorithms/extract_contour_tests.cpp
             libimages/algorithms/grayscale_tests.cpp
             libimages/algorithms/morphology_tests.cpp
