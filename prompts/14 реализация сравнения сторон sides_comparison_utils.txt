@@ -1,0 +1,8 @@
+прочитай main.cpp, его менять нельзя:
+...
+
+теперь взгляни на sides_comparison_utils.h:
+...
+
+напиши мне реализации этих функций extractColors(), downsample(), drawRGBLine(), drawGraph()  в sides_comparison_utils.cpp
+и покрой юнит-тестами (с визуализацией) функцию downsample
