@@ -44,7 +44,7 @@ int main() {
 
         // создание визуализации каждой пары сопоставлений занимает большое время, поэтому оставим этот выключатель на будущее
         // когда нужен просто результат без анализа - можно будет выключить
-        bool draw_sides_matching_plots = false;
+        bool draw_sides_matching_plots = true;
 
         Timer all_images_t;
         for (const std::string &image_name: to_process) {
