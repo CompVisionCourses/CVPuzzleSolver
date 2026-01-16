@@ -6,7 +6,7 @@
 
 Мини-курс читался старшеклассникам-олимпиадникам в течении 7 занятий по полтора часа и состоял из лекций + практик.
 
-Лекции записаны на видео - **TODO (скоро будут выложены)**
+[Лекции записаны на видео](https://www.youtube.com/watch?v=EudQW1W8Ypk&list=PL5p-5hHpsHBpMSZZRrFBpN2MnffUg-AA_)
 
 [Конспекты и задания](https://polarnick.com/blogs/courses/Sirius26CVPuzzleSolver/index_ru.html)
 
