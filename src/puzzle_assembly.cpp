@@ -517,7 +517,7 @@ PuzzleAssemblyResult assemblePuzzle(
         res.grid[idx] = PlacedPiece{obj, rot};
     }
 
-    // 9) TODO Определим ширину/высоту каждого столбика/строки пазла (медиана от ширин/высот назначенных кусочков)
+    // 9) DONE Определим ширину/высоту каждого столбика/строки пазла (медиана от ширин/высот назначенных кусочков)
     //    пока что в коде сделано наивно - везде ширина и толщина берется за 200 пикселей
     // Подсказки:
     // 1) сначала подумайте - что нам нужно выяснить из кода выше?
@@ -529,6 +529,49 @@ PuzzleAssemblyResult assemblePuzzle(
     res.colW = std::vector<int>(W, 200);
     // 5) а куда записать размер для каждой строки? вот сюда (сейчас сюда пишется H штук чисел 200, где H - число строчек):
     res.rowH = std::vector<int>(H, 200);
+
+    std::vector<std::vector<float>> colWidths(static_cast<size_t>(W));
+    std::vector<std::vector<float>> rowHeights(static_cast<size_t>(H));
+
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const PlacedPiece pp = res.grid[static_cast<size_t>(y) * static_cast<size_t>(W) + static_cast<size_t>(x)];
+            rassert(pp.obj >= 0, 90100028);
+
+            const auto& corners = objCorners[static_cast<size_t>(pp.obj)];
+
+            // Board corners: TL=3, TR=0, BR=1, BL=2
+            const point2i TL = corners[static_cast<size_t>(pieceCornerFromBoardCorner(3, pp.rot90))];
+            const point2i TR = corners[static_cast<size_t>(pieceCornerFromBoardCorner(0, pp.rot90))];
+            const point2i BR = corners[static_cast<size_t>(pieceCornerFromBoardCorner(1, pp.rot90))];
+            const point2i BL = corners[static_cast<size_t>(pieceCornerFromBoardCorner(2, pp.rot90))];
+
+            const float w1 = dist2f(TL, TR);
+            const float w2 = dist2f(BL, BR);
+            const float h1 = dist2f(TL, BL);
+            const float h2 = dist2f(TR, BR);
+
+            const float wv = 0.5f * (w1 + w2);
+            const float hv = 0.5f * (h1 + h2);
+
+            colWidths[static_cast<size_t>(x)].push_back(wv);
+            rowHeights[static_cast<size_t>(y)].push_back(hv);
+        }
+    }
+
+    // Fallbacks: median of all image widths/heights
+    std::vector<float> allW, allH;
+    allW.reserve(static_cast<size_t>(objects_count));
+    allH.reserve(static_cast<size_t>(objects_count));
+    for (int obj = 0; obj < objects_count; ++obj) {
+        allW.push_back((float)objImages[static_cast<size_t>(obj)].width());
+        allH.push_back((float)objImages[static_cast<size_t>(obj)].height());
+    }
+    const int fallbackW = medianRounded(allW, 64);
+    const int fallbackH = medianRounded(allH, 64);
+
+    for (int x = 0; x < W; ++x) res.colW[static_cast<size_t>(x)] = medianRounded(colWidths[static_cast<size_t>(x)], fallbackW);
+    for (int y = 0; y < H; ++y) res.rowH[static_cast<size_t>(y)] = medianRounded(rowHeights[static_cast<size_t>(y)], fallbackH);
 
     // Prefix sums
     std::vector<int> xOff(static_cast<size_t>(W + 1), 0);
